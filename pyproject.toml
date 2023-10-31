@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "bsa-migration"
+version = "0.1.0"
+description = "BSA Troop 701 Data Migration from TroopMaster to ScoutingBook"
+authors = ["Zheng, Yang <kevin.cn.zhengyang@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "bsa_migration"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+httpx = "^0.25.0"
+loguru = "^0.7.2"
+nicegui = "^1.4.1"
+pandas = "2.1.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
