@@ -13,7 +13,6 @@
 from nicegui import app, ui
 from loguru import logger
 
-import os
 from dotenv import set_key, find_dotenv
 from pathlib import Path
 

@@ -5,7 +5,7 @@
 * @Author      : kevin.z.y <kevin.cn.zhengyang@gmail.com>
 * @Date        : 2023-10-31 19:15:28
 * @LastEditors : kevin.z.y <kevin.cn.zhengyang@gmail.com>
-* @LastEditTime: 2023-11-01 00:08:21
+* @LastEditTime: 2023-11-01 09:33:50
 * @FilePath    : /BSA_Migration/pages/activities_page.py
 * @Description :
 * @Copyright (c) 2023 by Zheng, Yang, All Rights Reserved.
@@ -13,7 +13,7 @@
 from nicegui import ui
 
 from pages.theme import page_frame
-from api.activities import export_activities
+from api.activities import export_activities, load_activities
 
 class ActParams:
     def __init__(self):
@@ -78,7 +78,7 @@ def create() -> None:
             ui.checkbox('Serv Proj').bind_value(act_params, "serv")
             ui.checkbox('Swimming').bind_value(act_params, "swimming")
 
-        def export_acts():
+        async def export_acts():
             act_params.act_types = []
             if (act_params.activity):
                 act_params.act_types.append("Activity")
@@ -114,12 +114,15 @@ def create() -> None:
                 act_params.act_types.append("Serv Proj")
             if (act_params.swimming):
                 act_params.act_types.append("Swimming")
-            grid.options['rowData'] = export_activities(act_params)
-            print(grid.options['rowData'])
+            grid.options['rowData'] = await export_activities(act_params)
             grid.update()
 
         def import_acts():
             grid.options['rowData'] = []
+            grid.update()
+
+        def refresh_grid():
+            grid.options['rowData'] = load_activities()
             grid.update()
 
         def clear_grid():
@@ -129,6 +132,7 @@ def create() -> None:
         with ui.row():
             ui.button('Export', on_click=export_acts)
             ui.button('Import', on_click=import_acts)
+            ui.button('Refresh', on_click=refresh_grid)
             ui.button('Clear', on_click=clear_grid)
         grid = ui.aggrid({
             'defaultColDef': {'flex': 1},
@@ -146,6 +150,6 @@ def create() -> None:
                 {'headerName': 'Remark', 'field': 'Remark', 'hide': True},
                 {'headerName': 'Description', 'field': 'Description', 'hide': True},
             ],
-            'rowData': [],
+            'rowData': load_activities(),
             'rowSelection': 'multiple',
         }).classes('max-h-40')

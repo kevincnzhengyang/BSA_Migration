@@ -5,7 +5,7 @@
 * @Author      : kevin.z.y <kevin.cn.zhengyang@gmail.com>
 * @Date        : 2023-10-31 21:22:51
 * @LastEditors : kevin.z.y <kevin.cn.zhengyang@gmail.com>
-* @LastEditTime: 2023-11-01 00:19:09
+* @LastEditTime: 2023-11-02 00:09:31
 * @FilePath    : /BSA_Migration/api/activities.py
 * @Description :
 * @Copyright (c) 2023 by Zheng, Yang, All Rights Reserved.
@@ -14,36 +14,57 @@ import httpx
 import time
 import pandas as pd
 
-from nicegui import app, ui
+from pathlib import Path
+from nicegui import app
+from lxml import etree
 from loguru import logger
 
 host = 'https://tmweb.troopmaster.com'
 headers = {'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'}
 
+type_amount_map = {
+    "Activity": "Amount",
+    "Adventure": "Amount",
+    "Aquatics": "Hours",
+    "Backpacking": "Nights",
+    "Camping": "Nights",
+    "Conservation": "Hours",
+    "Court Of Honor": "Amount",
+    "Cycling": "Amount",
+    "Egl Ct of Honor": "Amount",
+    "Fundraising": "Hours",
+    "Hiking": "Miles",
+    "ISB Calendar": "Amount",
+    "Kayaking": "Amount",
+    "Meeting": "Amount",
+    "Riding": "Miles",
+    "Serv Proj": "Hours",
+    "Swimming": "Miles",
+}
 
-def get_activities_list() -> pd.DataFrame:
-    with httpx.Client(headers=headers) as client:
+async def get_activities_list() -> pd.DataFrame:
+    async with httpx.AsyncClient(headers=headers) as client:
         # get cookie for pick site
-        r = client.get(host + '/Login/PickSite', headers=headers, timeout=10.0)
+        r = await client.get(host + '/Login/PickSite', headers=headers, timeout=10.0)
         r.raise_for_status()
         cookie = r.headers["set-cookie"].split(";")[0]
         logger.debug(f"cookie={cookie}")
         headers.update({"Cookie": cookie})
         # select state
-        r = client.post(host + '/Login/SelectState',
+        r = await client.post(host + '/Login/SelectState',
                         data={"state": app.storage.general['TM_STATE']},
                         headers=headers, timeout=10.0)
         r.raise_for_status()
         logger.debug(f"tenantid={r.json()['tenantid']}")
         # select site, get cookie for session
-        r = client.post(host + '/Login/SiteSelected',
+        r = await client.post(host + '/Login/SiteSelected',
                         data={"SiteId": app.storage.general['TM_SITEID']},
                         headers=headers, timeout=10.0)
         r.raise_for_status()
         cookie = cookie + "; " + r.headers["set-cookie"].split(";")[0]
         headers.update({"Cookie": cookie})
         # login
-        r = client.post(host + '/Login/Login',
+        r = await client.post(host + '/Login/Login',
                         data={"UserID": app.storage.general['TM_USERID'],
                               "Password": app.storage.general['TM_PASSWORD']},
                         headers=headers, timeout=10.0)
@@ -56,37 +77,105 @@ def get_activities_list() -> pd.DataFrame:
         cookie = cookie + "; HomeTroopMasterWebSiteID=206136"
         logger.debug(f"cookie={cookie}")
         headers.update({"Cookie": cookie})
-        # ui.notify(f"Login TroopMaster Success")
         # keep alive
-        # r = client.post(host + '/Home/KeepAlive', headers=headers, timeout=10.0)
-        # r.raise_for_status()
-        # get all activities
-        r = client.post(host + '/ActivityManagement/MemberFilter/?id=all', timeout=10.0, headers=headers)
+        r = await client.post(host + '/Home/KeepAlive', headers=headers, timeout=10.0)
         r.raise_for_status()
-        # ui.notify(f"Get all activities")
+        # get all activities
+        r = await client.post(host + '/ActivityManagement/MemberFilter/?id=all', timeout=10.0, headers=headers)
+        r.raise_for_status()
         return pd.read_json(r.text)
 
-def get_act_details(df: pd.DataFrame) -> None:
+async def get_act_details(act_id: str) -> list:
+    async with httpx.AsyncClient(headers=headers) as client:
+        act_attrs = {
+            "scouts": [],
+            "adults": [],
+        }
 
-    with httpx.Client(headers=headers) as client:
         # keep alive
-        r = client.post(host + '/Home/KeepAlive', headers=headers, timeout=10.0)
+        r = await client.post(host + '/Home/KeepAlive', headers=headers, timeout=10.0)
         r.raise_for_status()
 
         # get details of an activity
         headers.update({'X-Requested-With': 'XMLHttpRequest'})
-
-        r = client.get(host + '/ActivityManagement/View/', timeout=10.0,
-                       params={"id": "206136d884d9076fa94bf09a09bfa174ffa823",
-                               "_": int(time.time())},
+        r = await client.get(host + '/ActivityManagement/View/', timeout=10.0,
+                       params={"id": act_id, "_": int(time.time())},
                       headers=headers)
         r.raise_for_status()
-        # print(r.text)
-    return df
 
-def export_activities(param: object) -> list:
+        # parse html response
+        html = etree.HTML(r.text)
+        # get basic info
+        for t in html.xpath('//div[@id="Activity"]/div/div')[0].iterchildren():
+            if t.tag == 'b' and t.tail and t.tail.strip():
+                logger.debug(f"{t.text}:{t.tail}")
+                act_attrs[t.text.strip().strip(":")] = t.tail.strip()
+        for t in html.xpath('//div[@id="Activity"]/div/div')[1].iterchildren():
+            if t.tag == 'b':
+                logger.debug(f"{t.text}:{t.tail}")
+                act_attrs[t.text.strip().strip(":")] = t.tail.strip()
+            elif t.tag == 'label':
+                # join multiple lines into a string
+                # Remarks, Documents and Description
+                value = []
+                for s in t.itersiblings():
+                    if s.tag == 'br' and s.tail and s.tail.strip():
+                        value.append(s.tail.strip())
+                logger.debug(f"{t.text}:{value}")
+                act_attrs[t.text.strip()] = ' '.join(value)
+        # get scout attendance
+        s_att = html.xpath('//div[@id="Attendance"]//td[contains(@class, "scout")]')
+        for i in range(0, len(s_att), 7):
+            a = s_att[i]
+            child = s_att[i+1].getchildren()[0]
+            if child.tag == 'span' and child.text and child.text == 'X':
+                # logger.debug(f"{a.text.strip()}---1")
+                act_attrs["scouts"].append(a.text.strip())
+            # else:
+            #     logger.debug(f"{a.text.strip()}---0")
+        # get adult attendance
+        a_att = html.xpath('//div[@id="Attendance"]//td[contains(@class, "scout")]')
+        for i in range(0, len(a_att), 7):
+            a = a_att[i]
+            child = a_att[i+1].getchildren()[0]
+            if child.tag == 'span' and child.text and child.text == 'X':
+                # logger.debug(f"{a.text.strip()}---1")
+                act_attrs["adults"].append(a.text.strip())
+            # else:
+            #     logger.debug(f"{a.text.strip()}---0")
+
+        # get registration
+        # todo
+        # logger.info(f"attrs={act_attrs}")
+    return ["; ".join(act_attrs["scouts"]),
+            "; ".join(act_attrs["adults"]),
+            act_attrs.get(type_amount_map[act_attrs["Activity Type"]], ""),
+            act_attrs.get("Credit Towards", ""),
+            act_attrs.get("Remarks", ""),
+            act_attrs.get("Documents", ""),
+            act_attrs.get("Description", "")]
+
+async def complete_acts(df: pd.DataFrame) -> None:
+    for index, row in df.iterrows():
+        logger.debug(f"processing act [{row['Title']}]...")
+        df.at[index, "ScoutAttendances"], df.at[index, "AdultAttendances"], \
+        df.at[index, "Amount"], df.at[index, "Credits"], \
+        df.at[index, "Remarks"], df.at[index, "Documents"], \
+        df.at[index, "Description"] = await get_act_details(row["ActivityID"])
+    # print(df.to_dict())
+    return
+
+def load_activities() -> list:
+    # using local data
+    path = Path.cwd().joinpath('acts_list.csv')
+    if path.exists():
+        return pd.read_csv(path).to_dict('records')
+    else:
+        return []
+
+async def export_activities(param: object) -> list:
     # get all activities
-    df = get_activities_list()
+    df = await get_activities_list()
     # convert datetime
     df['StartDate'] = pd.to_datetime(df['StartDateStr'], format="mixed")
     df['EndDate'] = pd.to_datetime(df['EndDateStr'], format="mixed")
@@ -100,10 +189,13 @@ def export_activities(param: object) -> list:
     # ui.notify(f"{len(df)} activities to be exported")
     logger.info(f"{len(df)} activities to be exported")
     # new column for attendances, amount, credits, remark and description
-    df = df.assign(Attendances="", Amount="", Credits="", Remarks="", Description="")
+    df = df.assign(ScoutAttendances="", AdultAttendances="", Amount="",
+                   Credits="", Remarks="", Documents="", Description="")
     # delete columns
     df = df.drop(['Color', 'StartDateStr', 'EndDateStr', 'Register',
                   'Status', 'RegisterWithNum', 'AllDay'], axis=1)
-    get_act_details(df)
+    await complete_acts(df)
+    # save to local
+    df.to_csv(Path.cwd().joinpath('acts_list.csv'))
     return df.astype(str).to_dict('records')
 
