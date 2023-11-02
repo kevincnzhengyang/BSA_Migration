@@ -5,7 +5,7 @@
 * @Author      : kevin.z.y <kevin.cn.zhengyang@gmail.com>
 * @Date        : 2023-10-31 21:22:51
 * @LastEditors : kevin.z.y <kevin.cn.zhengyang@gmail.com>
-* @LastEditTime: 2023-11-02 00:09:31
+* @LastEditTime: 2023-11-02 15:42:41
 * @FilePath    : /BSA_Migration/api/activities.py
 * @Description :
 * @Copyright (c) 2023 by Zheng, Yang, All Rights Reserved.
@@ -143,9 +143,14 @@ async def get_act_details(act_id: str) -> list:
                 act_attrs["adults"].append(a.text.strip())
             # else:
             #     logger.debug(f"{a.text.strip()}---0")
-
         # get registration
-        # todo
+        regs = html.xpath('//div[@id="Registration"]/div/div')
+        if regs:
+            for t in regs[0].iterchildren():
+                if t.tag == 'b' and t.tail and t.tail.strip():
+                    logger.debug(f"{t.text}:{t.tail}")
+                    act_attrs[t.text.strip().strip(":")] = t.tail.strip()
+
         # logger.info(f"attrs={act_attrs}")
     return ["; ".join(act_attrs["scouts"]),
             "; ".join(act_attrs["adults"]),
@@ -153,15 +158,22 @@ async def get_act_details(act_id: str) -> list:
             act_attrs.get("Credit Towards", ""),
             act_attrs.get("Remarks", ""),
             act_attrs.get("Documents", ""),
-            act_attrs.get("Description", "")]
+            act_attrs.get("Description", ""),
+            act_attrs.get("Scouts Registered", "0"),
+            act_attrs.get("Adults Registered", "0")]
 
 async def complete_acts(df: pd.DataFrame) -> None:
+    total = len(df)
+    i = 0
     for index, row in df.iterrows():
         logger.debug(f"processing act [{row['Title']}]...")
         df.at[index, "ScoutAttendances"], df.at[index, "AdultAttendances"], \
         df.at[index, "Amount"], df.at[index, "Credits"], \
         df.at[index, "Remarks"], df.at[index, "Documents"], \
-        df.at[index, "Description"] = await get_act_details(row["ActivityID"])
+        df.at[index, "Description"], df.at[index, "ScoutsReg"], \
+        df.at[index, "AdultsReg"] = await get_act_details(row["ActivityID"])
+        i = i + 1
+        logger.info(f"--- {i} of {total} - row['Title'] ---")
     # print(df.to_dict())
     return
 
@@ -190,7 +202,8 @@ async def export_activities(param: object) -> list:
     logger.info(f"{len(df)} activities to be exported")
     # new column for attendances, amount, credits, remark and description
     df = df.assign(ScoutAttendances="", AdultAttendances="", Amount="",
-                   Credits="", Remarks="", Documents="", Description="")
+                   Credits="", Remarks="", Documents="", Description="",
+                   ScoutsReg="", AdultsReg="")
     # delete columns
     df = df.drop(['Color', 'StartDateStr', 'EndDateStr', 'Register',
                   'Status', 'RegisterWithNum', 'AllDay'], axis=1)
