@@ -5,7 +5,7 @@
 * @Author      : kevin.z.y <kevin.cn.zhengyang@gmail.com>
 * @Date        : 2023-10-31 21:22:51
 * @LastEditors : kevin.z.y <kevin.cn.zhengyang@gmail.com>
-* @LastEditTime: 2023-11-02 15:42:41
+* @LastEditTime: 2023-11-08 20:44:35
 * @FilePath    : /BSA_Migration/api/activities.py
 * @Description :
 * @Copyright (c) 2023 by Zheng, Yang, All Rights Reserved.
@@ -14,6 +14,7 @@ import httpx
 import time
 import pandas as pd
 
+from typing import Callable
 from pathlib import Path
 from nicegui import app
 from lxml import etree
@@ -21,6 +22,7 @@ from loguru import logger
 
 host = 'https://tmweb.troopmaster.com'
 headers = {'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'}
+max_timeout = 10.0  # max timeout for http
 
 type_amount_map = {
     "Activity": "Amount",
@@ -42,32 +44,43 @@ type_amount_map = {
     "Swimming": "Miles",
 }
 
+async def retry_timeout(method: Callable, url: str, **kwargs) -> object:
+    try:
+        return await method(url, **kwargs)
+    except httpx.ReadTimeout:
+        logger.warning(f"timeout for {method} {url}, retry...")
+        return await retry_timeout(method, url, **kwargs)
+
 async def get_activities_list() -> pd.DataFrame:
     async with httpx.AsyncClient(headers=headers) as client:
-        # get cookie for pick site
-        r = await client.get(host + '/Login/PickSite', headers=headers, timeout=10.0)
+        r = await retry_timeout(
+            client.get, host + '/Login/PickSite',
+            headers=headers, timeout=max_timeout)
         r.raise_for_status()
         cookie = r.headers["set-cookie"].split(";")[0]
         logger.debug(f"cookie={cookie}")
         headers.update({"Cookie": cookie})
         # select state
-        r = await client.post(host + '/Login/SelectState',
-                        data={"state": app.storage.general['TM_STATE']},
-                        headers=headers, timeout=10.0)
+        r = await retry_timeout(
+            client.post, host + '/Login/SelectState',
+            data={"state": app.storage.general['TM_STATE']},
+            headers=headers, timeout=max_timeout)
         r.raise_for_status()
         logger.debug(f"tenantid={r.json()['tenantid']}")
         # select site, get cookie for session
-        r = await client.post(host + '/Login/SiteSelected',
-                        data={"SiteId": app.storage.general['TM_SITEID']},
-                        headers=headers, timeout=10.0)
+        r = await retry_timeout(
+            client.post, host + '/Login/SiteSelected',
+            data={"SiteId": app.storage.general['TM_SITEID']},
+            headers=headers, timeout=max_timeout)
         r.raise_for_status()
         cookie = cookie + "; " + r.headers["set-cookie"].split(";")[0]
         headers.update({"Cookie": cookie})
         # login
-        r = await client.post(host + '/Login/Login',
-                        data={"UserID": app.storage.general['TM_USERID'],
-                              "Password": app.storage.general['TM_PASSWORD']},
-                        headers=headers, timeout=10.0)
+        r = await retry_timeout(
+            client.post, host + '/Login/Login',
+            data={"UserID": app.storage.general['TM_USERID'],
+                  "Password": app.storage.general['TM_PASSWORD']},
+            headers=headers, timeout=max_timeout)
         r.raise_for_status()
         if r.json()["message"]:
             logger.error(r.json()["message"])
@@ -78,10 +91,14 @@ async def get_activities_list() -> pd.DataFrame:
         logger.debug(f"cookie={cookie}")
         headers.update({"Cookie": cookie})
         # keep alive
-        r = await client.post(host + '/Home/KeepAlive', headers=headers, timeout=10.0)
+        r = await retry_timeout(
+            client.post, host + '/Home/KeepAlive',
+            headers=headers, timeout=max_timeout)
         r.raise_for_status()
         # get all activities
-        r = await client.post(host + '/ActivityManagement/MemberFilter/?id=all', timeout=10.0, headers=headers)
+        r = await retry_timeout(
+            client.post, host + '/ActivityManagement/MemberFilter/?id=all',
+            timeout=30.0, headers=headers)
         r.raise_for_status()
         return pd.read_json(r.text)
 
@@ -93,14 +110,17 @@ async def get_act_details(act_id: str) -> list:
         }
 
         # keep alive
-        r = await client.post(host + '/Home/KeepAlive', headers=headers, timeout=10.0)
+        r = await retry_timeout(
+            client.post, host + '/Home/KeepAlive',
+            headers=headers, timeout=max_timeout)
         r.raise_for_status()
 
         # get details of an activity
         headers.update({'X-Requested-With': 'XMLHttpRequest'})
-        r = await client.get(host + '/ActivityManagement/View/', timeout=10.0,
-                       params={"id": act_id, "_": int(time.time())},
-                      headers=headers)
+        r = await retry_timeout(
+            client.get, host + '/ActivityManagement/View/',
+            timeout=max_timeout, headers=headers,
+            params={"id": act_id, "_": int(time.time())})
         r.raise_for_status()
 
         # parse html response
@@ -210,5 +230,5 @@ async def export_activities(param: object) -> list:
     await complete_acts(df)
     # save to local
     df.to_csv(Path.cwd().joinpath('acts_list.csv'))
+    logger.info(f"export finished!")
     return df.astype(str).to_dict('records')
-
