@@ -5,7 +5,7 @@
 * @Author      : kevin.z.y <kevin.cn.zhengyang@gmail.com>
 * @Date        : 2023-10-31 21:22:51
 * @LastEditors : kevin.z.y <kevin.cn.zhengyang@gmail.com>
-* @LastEditTime: 2023-11-08 20:44:35
+* @LastEditTime: 2023-11-10 20:40:44
 * @FilePath    : /BSA_Migration/api/activities.py
 * @Description :
 * @Copyright (c) 2023 by Zheng, Yang, All Rights Reserved.
@@ -47,7 +47,7 @@ type_amount_map = {
 async def retry_timeout(method: Callable, url: str, **kwargs) -> object:
     try:
         return await method(url, **kwargs)
-    except httpx.ReadTimeout:
+    except (httpx.ReadTimeout, httpx.ConnectTimeout):
         logger.warning(f"timeout for {method} {url}, retry...")
         return await retry_timeout(method, url, **kwargs)
 
@@ -110,10 +110,10 @@ async def get_act_details(act_id: str) -> list:
         }
 
         # keep alive
-        r = await retry_timeout(
-            client.post, host + '/Home/KeepAlive',
-            headers=headers, timeout=max_timeout)
-        r.raise_for_status()
+        # r = await retry_timeout(
+        #     client.post, host + '/Home/KeepAlive',
+        #     headers=headers, timeout=max_timeout)
+        # r.raise_for_status()
 
         # get details of an activity
         headers.update({'X-Requested-With': 'XMLHttpRequest'})
@@ -154,7 +154,7 @@ async def get_act_details(act_id: str) -> list:
             # else:
             #     logger.debug(f"{a.text.strip()}---0")
         # get adult attendance
-        a_att = html.xpath('//div[@id="Attendance"]//td[contains(@class, "scout")]')
+        a_att = html.xpath('//div[@id="Attendance"]//td[contains(@class, "adult")]')
         for i in range(0, len(a_att), 7):
             a = a_att[i]
             child = a_att[i+1].getchildren()[0]
@@ -193,7 +193,7 @@ async def complete_acts(df: pd.DataFrame) -> None:
         df.at[index, "Description"], df.at[index, "ScoutsReg"], \
         df.at[index, "AdultsReg"] = await get_act_details(row["ActivityID"])
         i = i + 1
-        logger.info(f"--- {i} of {total} - row['Title'] ---")
+        logger.info(f"--- {i} of {total} ---")
     # print(df.to_dict())
     return
 
